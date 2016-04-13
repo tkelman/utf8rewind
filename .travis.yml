@@ -6,6 +6,8 @@ dist: trusty
 notifications:
   email: false
 script:
+  - make -j4 all
+  - make clean
   - if [ $(uname) = Linux ]; then sudo apt-get install -y doxygen; fi
   - if [ $(uname) = Darwin ]; then brew install doxygen; fi
   - tools/gyp/gyp --depth=. --format=make utf8rewind.gyp
