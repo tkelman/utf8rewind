@@ -6,17 +6,9 @@ dist: trusty
 notifications:
   email: false
 script:
-  - if [ $(uname) = Linux ]; then
-      sudo apt-get install -y doxygen;
-      tools/gyp/gyp --depth=. utf8rewind.gyp;
-      make -j4;
-      make -j4 tests-rewind;
-    fi
-  - if [ $(uname) = Darwin ]; then
-      brew install doxygen;
-      tools/gyp/gyp --depth utf8rewind.gyp;
-      export CXXFLAGS=-std=c++11;
-      xcodebuild -project utf8rewind.xcodeproj;
-      xcodebuild -project tests-rewind.xcodeproj;
-    fi
+  - if [ $(uname) = Linux ]; then sudo apt-get install -y doxygen; fi
+  - if [ $(uname) = Darwin ]; then brew install doxygen; fi
+  - tools/gyp/gyp --depth=. --format=make utf8rewind.gyp
+  - make -j4 CXXFLAGS=-std=c++11
+  - make -j4 tests-rewind CXXFLAGS=-std=c++11
   - echo ok | output/*/x86/Debug/tests-rewind
