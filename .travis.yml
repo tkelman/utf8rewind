@@ -3,8 +3,8 @@ os:
   - linux
   - osx
 script:
-  - if [ $(uname -o) = Linux ]; then sudo apt-get install -y doxygen; fi
-  - tools/gyp/gyp --depth utf8rewind.gyp
+  - if [ $(uname) = Linux ]; then sudo apt-get install -y doxygen; fi
+  - tools/gyp/gyp utf8rewind.gyp
   - make -j4
   - make -j4 tests-rewind
   - output/*/x86/Debug/tests-rewind
