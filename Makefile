@@ -20,11 +20,11 @@ OBJS = source/internal/casemapping.o \
        source/unicodedatabase.o \
        source/utf8rewind.o
 
-.PHONY : all objects static shared clean
+.PHONY : all objects clean
 
 .DEFAULT_GOAL := all
 
-all: static shared
+all: $(LIBNAME).a $(LIBNAME).$(SHLIB_EXT)
 
 # magic makefile variables, see
 # https://www.gnu.org/software/make/manual/html_node/Automatic-Variables.html
@@ -33,10 +33,12 @@ all: static shared
 
 objects: $(OBJS)
 
-static: objects
+# static library
+$(LIBNAME).a: $(OBJS)
 	ar rcs $(LIBNAME).a $(OBJS)
 
-shared: objects
+# shared library
+$(LIBNAME).$(SHLIB_EXT): $(OBJS)
 	$(CC) -shared -o $(LIBNAME).$(SHLIB_EXT) $(OBJS)
 
 clean:
