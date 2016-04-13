@@ -3,11 +3,10 @@ os:
   - linux
   - osx
 dist: trusty
-osx_image: xcode7.3
 script:
   - if [ $(uname) = Linux ]; then sudo apt-get install -y doxygen; fi
   - if [ $(uname) = Darwin ]; then brew install doxygen; fi
   - tools/gyp/gyp --depth=. --format=make utf8rewind.gyp
-  - make -j4
-  - make -j4 tests-rewind
+  - make -j4 CXXFLAGS=-std=c++11
+  - make -j4 tests-rewind CXXFLAGS=-std=c++11
   - echo ok | output/*/x86/Debug/tests-rewind
