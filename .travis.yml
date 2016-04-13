@@ -15,6 +15,7 @@ script:
   - if [ $(uname) = Darwin ]; then
       brew install doxygen;
       tools/gyp/gyp --depth utf8rewind.gyp;
-      xcodebuild;
+      xcodebuild -project utf8rewind;
+      xcodebuild -project tests-rewind;
     fi
   - echo ok | output/*/x86/Debug/tests-rewind
