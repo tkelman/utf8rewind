@@ -1,0 +1,9 @@
+language: c
+os:
+  - linux
+  - osx
+script:
+  - gyp --depth=. utf8rewind.gyp
+  - make -j4
+  - make -j4 tests-rewind
+  - output/*/x86/Debug/tests-rewind
