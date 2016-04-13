@@ -4,10 +4,13 @@ LIBNAME := libutf8rewind
 
 ifeq ($(OS), Windows_NT)
 SHLIB_EXT = dll
+FPIC =
 else ifeq ($(shell uname), Darwin)
 SHLIB_EXT = dylib
+FPIC = -fPIC
 else
 SHLIB_EXT = so
+FPIC = -fPIC
 endif
 
 OBJS = source/internal/casemapping.o \
@@ -29,7 +32,7 @@ all: $(LIBNAME).a $(LIBNAME).$(SHLIB_EXT)
 # magic makefile variables, see
 # https://www.gnu.org/software/make/manual/html_node/Automatic-Variables.html
 %.o : %.c
-	$(CC) -Iinclude/utf8rewind -c $< -o $@
+	$(CC) $(FPIC) -Iinclude/utf8rewind -c $< -o $@
 
 objects: $(OBJS)
 
