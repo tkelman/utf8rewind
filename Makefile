@@ -29,7 +29,7 @@ all: static shared
 # magic makefile variables, see
 # https://www.gnu.org/software/make/manual/html_node/Automatic-Variables.html
 %.o : %.c
-	$(CC) -c $< -o $@
+	$(CC) -Iinclude/utf8rewind -c $< -o $@
 
 objects: $(OBJS)
 
