@@ -147,6 +147,7 @@ class XcodeSettings(object):
   # Populated lazily by _SdkPath(). Shared by all XcodeSettings, so cached
   # at class-level for efficiency.
   _sdk_path_cache = {}
+  _platform_path_cache = {}
   _sdk_root_cache = {}
 
   # Populated lazily by GetExtraPlistItems(). Shared by all XcodeSettings, so
@@ -161,6 +162,8 @@ class XcodeSettings(object):
     self.spec = spec
 
     self.isIOS = False
+    self.mac_toolchain_dir = None
+    self.header_map_path = None
 
     # Per-target 'xcode_settings' are pushed down into configs earlier by gyp.
     # This means self.xcode_settings[config] always contains all settings
@@ -215,8 +218,30 @@ class XcodeSettings(object):
     if test_key in self._Settings():
       print 'Warning: Ignoring not yet implemented key "%s".' % test_key
 
+  def IsBinaryOutputFormat(self, configname):
+    default = "binary" if self.isIOS else "xml"
+    format = self.xcode_settings[configname].get('INFOPLIST_OUTPUT_FORMAT',
+                                                 default)
+    return format == "binary"
+
+  def IsIosFramework(self):
+    return self.spec['type'] == 'shared_library' and self._IsBundle() and \
+        self.isIOS
+
   def _IsBundle(self):
-    return int(self.spec.get('mac_bundle', 0)) != 0
+    return int(self.spec.get('mac_bundle', 0)) != 0 or self._IsXCTest()
+
+  def _IsXCTest(self):
+    return int(self.spec.get('mac_xctest_bundle', 0)) != 0
+
+  def _IsIosAppExtension(self):
+    return int(self.spec.get('ios_app_extension', 0)) != 0
+
+  def _IsIosWatchKitExtension(self):
+    return int(self.spec.get('ios_watchkit_extension', 0)) != 0
+
+  def _IsIosWatchApp(self):
+    return int(self.spec.get('ios_watch_app', 0)) != 0
 
   def GetFrameworkVersion(self):
     """Returns the framework version of the current target. Only valid for
@@ -237,7 +262,10 @@ class XcodeSettings(object):
           'WRAPPER_EXTENSION', default=default_wrapper_extension)
       return '.' + self.spec.get('product_extension', wrapper_extension)
     elif self.spec['type'] == 'executable':
-      return '.' + self.spec.get('product_extension', 'app')
+      if self._IsIosAppExtension() or self._IsIosWatchKitExtension():
+        return '.' + self.spec.get('product_extension', 'appex')
+      else:
+        return '.' + self.spec.get('product_extension', 'app')
     else:
       assert False, "Don't know extension for '%s', target '%s'" % (
           self.spec['type'], self.spec['target_name'])
@@ -292,6 +320,18 @@ class XcodeSettings(object):
 
   def GetProductType(self):
     """Returns the PRODUCT_TYPE of this target."""
+    if self._IsIosAppExtension():
+      assert self._IsBundle(), ('ios_app_extension flag requires mac_bundle '
+          '(target %s)' % self.spec['target_name'])
+      return 'com.apple.product-type.app-extension'
+    if self._IsIosWatchKitExtension():
+      assert self._IsBundle(), ('ios_watchkit_extension flag requires '
+          'mac_bundle (target %s)' % self.spec['target_name'])
+      return 'com.apple.product-type.watchkit-extension'
+    if self._IsIosWatchApp():
+      assert self._IsBundle(), ('ios_watch_app flag requires mac_bundle '
+          '(target %s)' % self.spec['target_name'])
+      return 'com.apple.product-type.application.watchapp'
     if self._IsBundle():
       return {
         'executable': 'com.apple.product-type.application',
@@ -399,7 +439,7 @@ class XcodeSettings(object):
     # Since the CLT has no SDK paths anyway, returning None is the
     # most sensible route and should still do the right thing.
     try:
-      return GetStdout(['xcodebuild', '-version', '-sdk', sdk, infoitem])
+      return GetStdout(['xcrun', '--sdk', sdk, infoitem])
     except:
       pass
 
@@ -407,6 +447,14 @@ class XcodeSettings(object):
     if configname is None:
       configname = self.configname
     return self.GetPerConfigSetting('SDKROOT', configname, default='')
+
+  def _XcodePlatformPath(self, configname=None):
+    sdk_root = self._SdkRoot(configname)
+    if sdk_root not in XcodeSettings._platform_path_cache:
+      platform_path = self._GetSdkVersionInfoItem(sdk_root,
+                                                  '--show-sdk-platform-path')
+      XcodeSettings._platform_path_cache[sdk_root] = platform_path
+    return XcodeSettings._platform_path_cache[sdk_root]
 
   def _SdkPath(self, configname=None):
     sdk_root = self._SdkRoot(configname)
@@ -416,7 +464,7 @@ class XcodeSettings(object):
 
   def _XcodeSdkPath(self, sdk_root):
     if sdk_root not in XcodeSettings._sdk_path_cache:
-      sdk_path = self._GetSdkVersionInfoItem(sdk_root, 'Path')
+      sdk_path = self._GetSdkVersionInfoItem(sdk_root, '--show-sdk-path')
       XcodeSettings._sdk_path_cache[sdk_root] = sdk_path
       if sdk_root:
         XcodeSettings._sdk_root_cache[sdk_path] = sdk_root
@@ -446,6 +494,9 @@ class XcodeSettings(object):
     sdk_root = self._SdkPath()
     if 'SDKROOT' in self._Settings() and sdk_root:
       cflags.append('-isysroot %s' % sdk_root)
+
+    if self.header_map_path:
+      cflags.append('-I%s' % self.header_map_path)
 
     if self._Test('CLANG_WARN_CONSTANT_CONVERSION', 'YES', default='NO'):
       cflags.append('-Wconstant-conversion')
@@ -495,6 +546,13 @@ class XcodeSettings(object):
     if self._Test('GCC_WARN_ABOUT_MISSING_NEWLINE', 'YES', default='NO'):
       cflags.append('-Wnewline-eof')
 
+    # In Xcode, this is only activated when GCC_COMPILER_VERSION is clang or
+    # llvm-gcc. It also requires a fairly recent libtool, and
+    # if the system clang isn't used, DYLD_LIBRARY_PATH needs to contain the
+    # path to the libLTO.dylib that matches the used clang.
+    if self._Test('LLVM_LTO', 'YES', default='NO'):
+      cflags.append('-flto')
+
     self._AppendPlatformVersionMinFlags(cflags)
 
     # TODO:
@@ -530,6 +588,10 @@ class XcodeSettings(object):
         cflags.append('-msse4.2')
 
     cflags += self._Settings().get('WARNING_CFLAGS', [])
+
+    platform_root = self._XcodePlatformPath(configname)
+    if platform_root and self._IsXCTest():
+      cflags.append('-F' + platform_root + '/Developer/Library/Frameworks/')
 
     if sdk_root:
       framework_root = sdk_root
@@ -703,8 +765,8 @@ class XcodeSettings(object):
     #   -exported_symbols_list file
     #   -Wl,exported_symbols_list file
     #   -Wl,exported_symbols_list,file
-    LINKER_FILE = '(\S+)'
-    WORD = '\S+'
+    LINKER_FILE = r'(\S+)'
+    WORD = r'\S+'
     linker_flags = [
       ['-exported_symbols_list', LINKER_FILE],    # Needed for NaCl.
       ['-unexported_symbols_list', LINKER_FILE],
@@ -794,6 +856,27 @@ class XcodeSettings(object):
     for directory in framework_dirs:
       ldflags.append('-F' + directory.replace('$(SDKROOT)', sdk_root))
 
+    platform_root = self._XcodePlatformPath(configname)
+    if sdk_root and platform_root and self._IsXCTest():
+      ldflags.append('-F' + platform_root + '/Developer/Library/Frameworks/')
+      ldflags.append('-framework XCTest')
+
+    is_extension = self._IsIosAppExtension() or self._IsIosWatchKitExtension()
+    if sdk_root and is_extension:
+      # Adds the link flags for extensions. These flags are common for all
+      # extensions and provide loader and main function.
+      # These flags reflect the compilation options used by xcode to compile
+      # extensions.
+      if XcodeVersion() < '0900':
+        ldflags.append('-lpkstart')
+        ldflags.append(sdk_root +
+            '/System/Library/PrivateFrameworks/PlugInKit.framework/PlugInKit')
+      else:
+        ldflags.append('-e _NSExtensionMain')
+      ldflags.append('-fapplication-extension')
+
+    self._Appendf(ldflags, 'CLANG_CXX_LIBRARY', '-stdlib=%s')
+
     self.configname = None
     return ldflags
 
@@ -864,7 +947,8 @@ class XcodeSettings(object):
         self._Test('STRIP_INSTALLED_PRODUCT', 'YES', default='NO')):
 
       default_strip_style = 'debugging'
-      if self.spec['type'] == 'loadable_module' and self._IsBundle():
+      if ((self.spec['type'] == 'loadable_module' or self._IsIosAppExtension())
+          and self._IsBundle()):
         default_strip_style = 'non-global'
       elif self.spec['type'] == 'executable':
         default_strip_style = 'all'
@@ -919,7 +1003,9 @@ class XcodeSettings(object):
     """Return a shell command to codesign the iOS output binary so it can
     be deployed to a device.  This should be run as the very last step of the
     build."""
-    if not (self.isIOS and self.spec['type'] == "executable"):
+    if not (self.isIOS and
+        (self.spec['type'] == 'executable' or self._IsXCTest()) or
+         self.IsIosFramework()):
       return []
 
     settings = self.xcode_settings[configname]
@@ -934,9 +1020,8 @@ class XcodeSettings(object):
       print 'Warning: Some codesign keys not implemented, ignoring: %s' % (
           ', '.join(sorted(unimpl)))
 
-    return ['%s code-sign-bundle "%s" "%s" "%s" "%s"' % (
+    return ['%s code-sign-bundle "%s" "%s" "%s"' % (
         os.path.join('${TARGET_BUILD_DIR}', 'gyp-mac-tool'), key,
-        settings.get('CODE_SIGN_RESOURCE_RULES_PATH', ''),
         settings.get('CODE_SIGN_ENTITLEMENTS', ''),
         settings.get('PROVISIONING_PROFILE', ''))
     ]
@@ -979,7 +1064,23 @@ class XcodeSettings(object):
     sdk_root = self._SdkPath(config_name)
     if not sdk_root:
       sdk_root = ''
-    return l.replace('$(SDKROOT)', sdk_root)
+    # Xcode 7 started shipping with ".tbd" (text based stubs) files instead of
+    # ".dylib" without providing a real support for them. What it does, for
+    # "/usr/lib" libraries, is do "-L/usr/lib -lname" which is dependent on the
+    # library order and cause collision when building Chrome.
+    #
+    # Instead substitude ".tbd" to ".dylib" in the generated project when the
+    # following conditions are both true:
+    # - library is referenced in the gyp file as "$(SDKROOT)/**/*.dylib",
+    # - the ".dylib" file does not exists but a ".tbd" file do.
+    library = l.replace('$(SDKROOT)', sdk_root)
+    if l.startswith('$(SDKROOT)'):
+      basename, ext = os.path.splitext(library)
+      if ext == '.dylib' and not os.path.exists(library):
+        tbd_library = basename + '.tbd'
+        if os.path.exists(tbd_library):
+          library = tbd_library
+    return library
 
   def AdjustLibraries(self, libraries, config_name=None):
     """Transforms entries like 'Cocoa.framework' in libraries into entries like
@@ -1005,25 +1106,37 @@ class XcodeSettings(object):
       xcode, xcode_build = XcodeVersion()
       cache['DTXcode'] = xcode
       cache['DTXcodeBuild'] = xcode_build
+      compiler = self.xcode_settings[configname].get('GCC_VERSION')
+      if compiler is not None:
+        cache['DTCompiler'] = compiler
 
       sdk_root = self._SdkRoot(configname)
       if not sdk_root:
         sdk_root = self._DefaultSdkRoot()
-      cache['DTSDKName'] = sdk_root
-      if xcode >= '0430':
+      sdk_version = self._GetSdkVersionInfoItem(sdk_root, '--show-sdk-version')
+      cache['DTSDKName'] = sdk_root + (sdk_version or '')
+      if xcode >= '0720':
         cache['DTSDKBuild'] = self._GetSdkVersionInfoItem(
-            sdk_root, 'ProductBuildVersion')
+            sdk_root, '--show-sdk-build-version')
+      elif xcode >= '0430':
+        cache['DTSDKBuild'] = sdk_version
       else:
         cache['DTSDKBuild'] = cache['BuildMachineOSBuild']
 
       if self.isIOS:
-        cache['DTPlatformName'] = cache['DTSDKName']
+        cache['MinimumOSVersion'] = self.xcode_settings[configname].get(
+            'IPHONEOS_DEPLOYMENT_TARGET')
+        cache['DTPlatformName'] = sdk_root
+        cache['DTPlatformVersion'] = sdk_version
+
         if configname.endswith("iphoneos"):
-          cache['DTPlatformVersion'] = self._GetSdkVersionInfoItem(
-              sdk_root, 'ProductVersion')
           cache['CFBundleSupportedPlatforms'] = ['iPhoneOS']
+          cache['DTPlatformBuild'] = cache['DTSDKBuild']
         else:
           cache['CFBundleSupportedPlatforms'] = ['iPhoneSimulator']
+          # This is weird, but Xcode sets DTPlatformBuild to an empty field
+          # for simulator builds.
+          cache['DTPlatformBuild'] = ""
       XcodeSettings._plist_cache[configname] = cache
 
     # Include extra plist items that are per-target, not per global
@@ -1189,13 +1302,13 @@ def XcodeVersion():
     # In that case this may be a CLT-only install so fall back to
     # checking that version.
     if len(version_list) < 2:
-      raise GypError, "xcodebuild returned unexpected results"
+      raise GypError("xcodebuild returned unexpected results")
   except:
     version = CLTVersion()
     if version:
-      version = re.match('(\d\.\d\.?\d*)', version).groups()[0]
+      version = re.match(r'(\d\.\d\.?\d*)', version).groups()[0]
     else:
-      raise GypError, "No Xcode or CLT version detected!"
+      raise GypError("No Xcode or CLT version detected!")
     # The CLT has no build information, so we return an empty string.
     version_list = [version, '']
   version = version_list[0]
@@ -1265,7 +1378,9 @@ def IsMacBundle(flavor, spec):
   Bundles are directories with a certain subdirectory structure, instead of
   just a single file. Bundle rules do not produce a binary but also package
   resources into that directory."""
-  is_mac_bundle = (int(spec.get('mac_bundle', 0)) != 0 and flavor == 'mac')
+  is_mac_bundle = int(spec.get('mac_xctest_bundle', 0)) != 0 or \
+      (int(spec.get('mac_bundle', 0)) != 0 and flavor == 'mac')
+
   if is_mac_bundle:
     assert spec['type'] != 'none', (
         'mac_bundle targets cannot have type none (target "%s")' %
@@ -1383,6 +1498,7 @@ def _GetXcodeEnv(xcode_settings, built_products_dir, srcroot, configuration,
 
   # These are filled in on a as-needed basis.
   env = {
+    'BUILT_FRAMEWORKS_DIR' : built_products_dir,
     'BUILT_PRODUCTS_DIR' : built_products_dir,
     'CONFIGURATION' : configuration,
     'PRODUCT_NAME' : xcode_settings.GetProductName(),
@@ -1393,11 +1509,15 @@ def _GetXcodeEnv(xcode_settings, built_products_dir, srcroot, configuration,
     # written for bundles:
     'TARGET_BUILD_DIR' : built_products_dir,
     'TEMP_DIR' : '${TMPDIR}',
+    'XCODE_VERSION_ACTUAL' : XcodeVersion()[0],
   }
   if xcode_settings.GetPerConfigSetting('SDKROOT', configuration):
     env['SDKROOT'] = xcode_settings._SdkPath(configuration)
   else:
     env['SDKROOT'] = ''
+
+  if xcode_settings.mac_toolchain_dir:
+    env['DEVELOPER_DIR'] = xcode_settings.mac_toolchain_dir
 
   if spec['type'] in (
       'executable', 'static_library', 'shared_library', 'loadable_module'):
