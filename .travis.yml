@@ -15,6 +15,7 @@ script:
   - if [ $(uname) = Darwin ]; then
       brew install doxygen;
       tools/gyp/gyp --depth utf8rewind.gyp;
+      export CXXFLAGS=-std=c++11;
       xcodebuild -project utf8rewind.xcodeproj;
       xcodebuild -project tests-rewind.xcodeproj;
     fi
